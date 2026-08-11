@@ -146,4 +146,37 @@ export async function getAllUsers(): Promise<User[]> {
   return users;
 }
 
+// Get all tasks for a user
+export async function getUserTasks(userId: string): Promise<Task[]> {
+  const tasks: Task[] = [];
+  const iter = kv.list<Task>({ prefix: ["tasks"] });
+
+  for await (const entry of iter) {
+    const task = entry.value;
+    if (task.userId === userId && !task.isCompleted) {
+      tasks.push(task);
+    }
+  }
+
+  // Sort by datetime
+  tasks.sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime());
+
+  return tasks;
+}
+
+// Delete task
+export async function deleteTask(taskId: string): Promise<void> {
+  const task = await getTask(taskId);
+  if (!task) {
+    throw new Error("Task not found");
+  }
+
+  const taskKey = ["tasks", taskId];
+  const userTaskKey = ["userTasks", task.userId, taskId];
+
+  await kv.delete(taskKey);
+  await kv.delete(userTaskKey);
+  console.log("Deleted task:", taskId);
+}
+
 export { kv };

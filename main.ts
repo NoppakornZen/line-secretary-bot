@@ -1,7 +1,8 @@
 // main.ts - Deno Deploy Entry Point
 import { LineClient } from "./line.ts";
 import { parseTask } from "./parser.ts";
-import { createUserIfNotExists, createTask } from "./database.ts";
+import { createUserIfNotExists, createTask, getTodayTasks, getUserTasks, updateTask, deleteTask } from "./database.ts";
+import { buildTaskList } from "./flexMessage.ts";
 import type { LineWebhookRequest } from "./types.ts";
 import "./cron.ts"; // Register cron jobs
 
@@ -31,6 +32,47 @@ async function handleWebhook(req: Request): Promise<Response> {
     const data: LineWebhookRequest = JSON.parse(body);
 
     for (const event of data.events) {
+      // Handle postback events (from buttons)
+      if (event.type === "postback") {
+        const userId = event.source.userId;
+        const postbackData = event.postback.data;
+        const replyToken = event.replyToken;
+
+        console.log(`[Webhook] Postback from ${userId}: ${postbackData}`);
+
+        await createUserIfNotExists(userId);
+
+        // Parse postback data
+        const params = new URLSearchParams(postbackData);
+        const action = params.get("action");
+        const taskId = params.get("taskId");
+
+        if (action === "complete" && taskId) {
+          await updateTask(taskId, { isCompleted: true });
+          await lineClient.replyMessage(replyToken, "✅ ทำเครื่องหมายงานเสร็จแล้ว!");
+        } else if (action === "delete" && taskId) {
+          await deleteTask(taskId);
+          await lineClient.replyMessage(replyToken, "🗑️ ลบงานเรียบร้อย!");
+        } else if (action === "view_today") {
+          const tasks = await getTodayTasks(userId);
+          const flexMessage = buildTaskList(tasks);
+          await lineClient.replyFlexMessage(replyToken, "งานวันนี้", flexMessage);
+        } else if (action === "view_all") {
+          const tasks = await getUserTasks(userId);
+          const flexMessage = buildTaskList(tasks);
+          await lineClient.replyFlexMessage(replyToken, "งานทั้งหมด", flexMessage);
+        } else if (action === "add_task") {
+          await lineClient.replyMessage(
+            replyToken,
+            "✍️ พิมพ์คำสั่งเพิ่มงาน:\n\n" +
+            "งาน [ชื่องาน] [วันนี้/พรุ่งนี้] [เวลา]\n\n" +
+            "ตัวอย่าง:\n" +
+            "งาน ประชุมทีม วันนี้ 14:30"
+          );
+        }
+      }
+
+      // Handle text messages
       if (event.type === "message" && event.message.type === "text") {
         const userId = event.source.userId;
         const text = event.message.text.trim();
@@ -53,6 +95,14 @@ async function handleWebhook(req: Request): Promise<Response> {
             "💡 บอทจะเตือนล่วงหน้า 30 นาที\n" +
             "💡 ส่งสรุปงานวันนี้ทุกเช้า 8:00 น."
           );
+        } else if (text === "ดูงานวันนี้" || text === "งานวันนี้") {
+          const tasks = await getTodayTasks(userId);
+          const flexMessage = buildTaskList(tasks);
+          await lineClient.replyFlexMessage(replyToken, "งานวันนี้", flexMessage);
+        } else if (text === "ดูงานทั้งหมด" || text === "งานทั้งหมด") {
+          const tasks = await getUserTasks(userId);
+          const flexMessage = buildTaskList(tasks);
+          await lineClient.replyFlexMessage(replyToken, "งานทั้งหมด", flexMessage);
         } else {
           // Parse task command
           const parsedTask = parseTask(text);

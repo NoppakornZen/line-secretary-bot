@@ -33,6 +33,62 @@ export class LineClient {
     }
   }
 
+  async replyFlexMessage(replyToken: string, altText: string, contents: unknown): Promise<void> {
+    const url = "https://api.line.me/v2/bot/message/reply";
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.channelAccessToken}`,
+      },
+      body: JSON.stringify({
+        replyToken: replyToken,
+        messages: [
+          {
+            type: "flex",
+            altText: altText,
+            contents: contents,
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error("LINE API Error:", error);
+      throw new Error(`LINE API Error: ${response.status}`);
+    }
+  }
+
+  async pushFlexMessage(userId: string, altText: string, contents: unknown): Promise<void> {
+    const url = "https://api.line.me/v2/bot/message/push";
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.channelAccessToken}`,
+      },
+      body: JSON.stringify({
+        to: userId,
+        messages: [
+          {
+            type: "flex",
+            altText: altText,
+            contents: contents,
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error("LINE API Error:", error);
+      throw new Error(`LINE API Error: ${response.status}`);
+    }
+  }
+
   async pushMessage(userId: string, text: string): Promise<void> {
     const url = "https://api.line.me/v2/bot/message/push";
 
