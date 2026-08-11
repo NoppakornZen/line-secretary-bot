@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rich Menu Generator</title>
+</head>
+<body>
+    <canvas id="canvas" width="2500" height="1686"></canvas>
+    <div style="margin-top: 20px;">
+        <button onclick="downloadImage()">ดาวน์โหลดรูปภาพ</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Background colors
+        const colors = {
+            yellow: '#F7D154',
+            blue: '#38BDF8',
+            green: '#6EE7B7',
+            orange: '#E9A568'
+        };
+
+        // Draw 4 sections
+        const halfW = 1250;
+        const halfH = 843;
+
+        // Top left - เพิ่มงาน (Yellow)
+        ctx.fillStyle = colors.yellow;
+        ctx.fillRect(0, 0, halfW, halfH);
+
+        // Top right - งานวันนี้ (Blue)
+        ctx.fillStyle = colors.blue;
+        ctx.fillRect(halfW, 0, halfW, halfH);
+
+        // Bottom left - งานทั้งหมด (Green)
+        ctx.fillStyle = colors.green;
+        ctx.fillRect(0, halfH, halfW, halfH);
+
+        // Bottom right - ช่วยเหลือ (Orange)
+        ctx.fillStyle = colors.orange;
+        ctx.fillRect(halfW, halfH, halfW, halfH);
+
+        // Draw borders
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 8;
+        ctx.strokeRect(0, 0, halfW, halfH);
+        ctx.strokeRect(halfW, 0, halfW, halfH);
+        ctx.strokeRect(0, halfH, halfW, halfH);
+        ctx.strokeRect(halfW, halfH, halfW, halfH);
+
+        // Text settings
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // Draw emoji and text
+        const sections = [
+            { emoji: '➕', text: 'เพิ่มงาน', x: halfW / 2, y: halfH / 2, color: '#0A0D12' },
+            { emoji: '📋', text: 'งานวันนี้', x: halfW + halfW / 2, y: halfH / 2, color: '#FFFFFF' },
+            { emoji: '📅', text: 'งานทั้งหมด', x: halfW / 2, y: halfH + halfH / 2, color: '#0A0D12' },
+            { emoji: '❓', text: 'ช่วยเหลือ', x: halfW + halfW / 2, y: halfH + halfH / 2, color: '#FFFFFF' }
+        ];
+
+        sections.forEach(section => {
+            ctx.fillStyle = section.color;
+
+            // Emoji
+            ctx.font = 'bold 180px Arial';
+            ctx.fillText(section.emoji, section.x, section.y - 100);
+
+            // Text
+            ctx.font = 'bold 80px "Segoe UI", Arial, sans-serif';
+            ctx.fillText(section.text, section.x, section.y + 120);
+        });
+
+        function downloadImage() {
+            const link = document.createElement('a');
+            link.download = 'richmenu.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        }
+
+        // Auto download after 1 second
+        setTimeout(() => {
+            downloadImage();
+            alert('✅ ดาวน์โหลดรูป richmenu.png เรียบร้อย!\n\nไฟล์อยู่ในโฟลเดอร์ Downloads ของคุณ');
+        }, 1000);
+    </script>
+</body>
+</html>
