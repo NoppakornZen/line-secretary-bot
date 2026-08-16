@@ -41,7 +41,6 @@ export async function createTask(
   reminderTime: Date
 ): Promise<string> {
   const taskId = crypto.randomUUID();
-  const taskKey = ["tasks", taskId];
 
   const task: Task = {
     taskId: taskId,
@@ -54,11 +53,12 @@ export async function createTask(
     createdAt: new Date(),
   };
 
-  await kv.set(taskKey, task);
-
-  // Create index for user's tasks
-  const userTaskKey = ["userTasks", userId, taskId];
-  await kv.set(userTaskKey, taskId);
+  // Atomic write: task + user index + reminder pending index
+  await kv.atomic()
+    .set(["tasks", taskId], task)
+    .set(["userTasks", userId, taskId], taskId)
+    .set(["remindersPending", taskId], taskId)
+    .commit();
 
   console.log("Created task:", taskId);
   return taskId;
@@ -77,20 +77,33 @@ export async function updateTask(taskId: string, updates: Partial<Task>): Promis
   }
 
   const updatedTask = { ...task, ...updates };
-  const taskKey = ["tasks", taskId];
-  await kv.set(taskKey, updatedTask);
+
+  const atomic = kv.atomic().set(["tasks", taskId], updatedTask);
+
+  // Manage remindersPending index based on reminderSent flag
+  if (updates.reminderSent === true) {
+    atomic.delete(["remindersPending", taskId]);
+  } else if (updates.reminderSent === false) {
+    // Snooze: re-add to pending
+    atomic.set(["remindersPending", taskId], taskId);
+  }
+
+  await atomic.commit();
 }
 
-// Get tasks that need reminders (reminderTime in the last minute)
+// Get tasks that need reminders using the remindersPending index
 export async function getTasksNeedingReminders(): Promise<Task[]> {
   const now = new Date();
   const oneMinuteAgo = new Date(now.getTime() - 60000);
 
   const tasks: Task[] = [];
-  const iter = kv.list<Task>({ prefix: ["tasks"] });
+  const iter = kv.list<string>({ prefix: ["remindersPending"] });
 
   for await (const entry of iter) {
-    const task = entry.value;
+    const taskId = entry.value;
+    const task = await getTask(taskId);
+    if (!task) continue;
+
     if (
       !task.isCompleted &&
       !task.reminderSent &&
@@ -104,7 +117,7 @@ export async function getTasksNeedingReminders(): Promise<Task[]> {
   return tasks;
 }
 
-// Get today's tasks for a user
+// Get today's tasks for a user — uses userTasks index
 export async function getTodayTasks(userId: string): Promise<Task[]> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -112,14 +125,16 @@ export async function getTodayTasks(userId: string): Promise<Task[]> {
   tomorrow.setDate(tomorrow.getDate() + 1);
 
   const tasks: Task[] = [];
-  const iter = kv.list<Task>({ prefix: ["tasks"] });
+  const iter = kv.list<string>({ prefix: ["userTasks", userId] });
 
   for await (const entry of iter) {
-    const task = entry.value;
+    const taskId = entry.value;
+    const task = await getTask(taskId);
+    if (!task) continue;
+
     const taskDate = new Date(task.datetime);
 
     if (
-      task.userId === userId &&
       !task.isCompleted &&
       taskDate >= today &&
       taskDate < tomorrow
@@ -128,9 +143,7 @@ export async function getTodayTasks(userId: string): Promise<Task[]> {
     }
   }
 
-  // Sort by datetime
   tasks.sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime());
-
   return tasks;
 }
 
@@ -146,36 +159,58 @@ export async function getAllUsers(): Promise<User[]> {
   return users;
 }
 
-// Get all tasks for a user
+// Get all incomplete tasks for a user — uses userTasks index
 export async function getUserTasks(userId: string): Promise<Task[]> {
   const tasks: Task[] = [];
-  const iter = kv.list<Task>({ prefix: ["tasks"] });
+  const iter = kv.list<string>({ prefix: ["userTasks", userId] });
 
   for await (const entry of iter) {
-    const task = entry.value;
-    if (task.userId === userId && !task.isCompleted) {
+    const taskId = entry.value;
+    const task = await getTask(taskId);
+    if (!task) continue;
+
+    if (!task.isCompleted) {
       tasks.push(task);
     }
   }
 
-  // Sort by datetime
   tasks.sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime());
-
   return tasks;
 }
 
-// Delete task
+// Get completed tasks for a user — uses userTasks index
+export async function getCompletedTasks(userId: string): Promise<Task[]> {
+  const tasks: Task[] = [];
+  const iter = kv.list<string>({ prefix: ["userTasks", userId] });
+
+  for await (const entry of iter) {
+    const taskId = entry.value;
+    const task = await getTask(taskId);
+    if (!task) continue;
+
+    if (task.isCompleted) {
+      tasks.push(task);
+    }
+  }
+
+  // Sort most recently completed first
+  tasks.sort((a, b) => new Date(b.datetime).getTime() - new Date(a.datetime).getTime());
+  return tasks;
+}
+
+// Delete task — cleans up all indexes atomically
 export async function deleteTask(taskId: string): Promise<void> {
   const task = await getTask(taskId);
   if (!task) {
     throw new Error("Task not found");
   }
 
-  const taskKey = ["tasks", taskId];
-  const userTaskKey = ["userTasks", task.userId, taskId];
+  await kv.atomic()
+    .delete(["tasks", taskId])
+    .delete(["userTasks", task.userId, taskId])
+    .delete(["remindersPending", taskId])
+    .commit();
 
-  await kv.delete(taskKey);
-  await kv.delete(userTaskKey);
   console.log("Deleted task:", taskId);
 }
 

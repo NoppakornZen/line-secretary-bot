@@ -6,7 +6,8 @@ import {
   getTodayTasks,
   updateTask,
 } from "./database.ts";
-import { formatDate, formatTime } from "./utils.ts";
+import { formatTime } from "./utils.ts";
+import { buildReminderMessage } from "./flexMessage.ts";
 
 const channelAccessToken = Deno.env.get("LINE_CHANNEL_ACCESS_TOKEN") || "";
 const lineClient = new LineClient(channelAccessToken);
@@ -28,14 +29,9 @@ Deno.cron("sendReminders", "* * * * *", async () => {
     console.log(`[Cron] Found ${tasks.length} tasks to remind`);
 
     for (const task of tasks) {
-      const datetime = new Date(task.datetime);
-      const message =
-        `⏰ อีก 30 นาทีจะถึงเวลา!\n\n` +
-        `📌 ${task.title}\n` +
-        `📅 ${formatDate(datetime)} ${formatTime(datetime)}`;
-
       try {
-        await lineClient.pushMessage(task.userId, message);
+        const flexCard = buildReminderMessage(task);
+        await lineClient.pushFlexMessage(task.userId, "⏰ แจ้งเตือนงาน", flexCard);
         await updateTask(task.taskId, { reminderSent: true });
         console.log(`[Cron] Sent reminder for task: ${task.taskId}`);
       } catch (error) {

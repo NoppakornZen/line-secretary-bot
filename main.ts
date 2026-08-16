@@ -1,8 +1,20 @@
 // main.ts - Deno Deploy Entry Point
 import { LineClient } from "./line.ts";
 import { parseTask } from "./parser.ts";
-import { createUserIfNotExists, createTask, getTodayTasks, getUserTasks, updateTask, deleteTask } from "./database.ts";
-import { buildTaskList } from "./flexMessage.ts";
+import {
+  createUserIfNotExists,
+  createTask,
+  getTask,
+  getTodayTasks,
+  getUserTasks,
+  getCompletedTasks,
+  updateTask,
+  deleteTask,
+} from "./database.ts";
+import {
+  buildTaskList,
+  buildDeleteConfirm,
+} from "./flexMessage.ts";
 import type { LineWebhookRequest } from "./types.ts";
 import "./cron.ts"; // Register cron jobs
 
@@ -22,7 +34,6 @@ async function handleWebhook(req: Request): Promise<Response> {
     const body = await req.text();
     const signature = req.headers.get("x-line-signature") || "";
 
-    // Verify signature
     const isValid = await lineClient.verifySignature(body, signature, channelSecret);
     if (!isValid) {
       console.error("[Webhook] Invalid signature");
@@ -32,27 +43,77 @@ async function handleWebhook(req: Request): Promise<Response> {
     const data: LineWebhookRequest = JSON.parse(body);
 
     for (const event of data.events) {
-      // Handle postback events (from buttons)
+      // ── POSTBACK EVENTS ──────────────────────────────────────────
       if (event.type === "postback") {
         const userId = event.source.userId;
-        const postbackData = event.postback.data;
         const replyToken = event.replyToken;
-
-        console.log(`[Webhook] Postback from ${userId}: ${postbackData}`);
-
-        await createUserIfNotExists(userId);
-
-        // Parse postback data
-        const params = new URLSearchParams(postbackData);
+        const params = new URLSearchParams(event.postback!.data);
         const action = params.get("action");
         const taskId = params.get("taskId");
 
+        console.log(`[Webhook] Postback from ${userId}: ${event.postback!.data}`);
+
+        await createUserIfNotExists(userId);
+
         if (action === "complete" && taskId) {
           await updateTask(taskId, { isCompleted: true });
-          await lineClient.replyMessage(replyToken, "✅ ทำเครื่องหมายงานเสร็จแล้ว!");
+          await lineClient.replyMessageWithQuickReply(
+            replyToken,
+            "✅ ทำเครื่องหมายงานเสร็จแล้ว!",
+            [
+              {
+                type: "action",
+                action: {
+                  type: "postback",
+                  label: "📋 ดูงานที่เหลือ",
+                  data: "action=view_all",
+                },
+              },
+            ]
+          );
+        } else if (action === "confirm_delete" && taskId) {
+          const task = await getTask(taskId);
+          if (task) {
+            const flex = buildDeleteConfirm(task);
+            await lineClient.replyFlexMessage(replyToken, "ยืนยันลบงานนี้ไหม?", flex);
+          } else {
+            await lineClient.replyMessage(replyToken, "❌ ไม่พบงานนี้");
+          }
         } else if (action === "delete" && taskId) {
           await deleteTask(taskId);
-          await lineClient.replyMessage(replyToken, "🗑️ ลบงานเรียบร้อย!");
+          await lineClient.replyMessageWithQuickReply(
+            replyToken,
+            "🗑️ ลบงานเรียบร้อย!",
+            [
+              {
+                type: "action",
+                action: {
+                  type: "postback",
+                  label: "📋 ดูงานที่เหลือ",
+                  data: "action=view_all",
+                },
+              },
+            ]
+          );
+        } else if (action === "snooze" && taskId) {
+          const task = await getTask(taskId);
+          if (task) {
+            const newReminderTime = new Date(
+              new Date(task.reminderTime).getTime() + 30 * 60000
+            );
+            await updateTask(taskId, { reminderSent: false, reminderTime: newReminderTime });
+            await lineClient.replyMessage(replyToken, "😴 เลื่อนการแจ้งเตือนออกไป 30 นาทีแล้ว");
+          } else {
+            await lineClient.replyMessage(replyToken, "❌ ไม่พบงานนี้");
+          }
+        } else if (action === "edit_task" && taskId) {
+          await lineClient.replyMessage(
+            replyToken,
+            "✏️ เพื่อแก้ไขงาน กรุณาพิมพ์งานใหม่ในรูปแบบ:\n\n" +
+              "งาน [ชื่องาน] [วัน] [เวลา]\n\n" +
+              "ตัวอย่าง:\nงาน ประชุมทีม พรุ่งนี้ 10:00\n\n" +
+              "⚠️ งานเดิมจะยังคงอยู่จนกว่าคุณจะลบมือ"
+          );
         } else if (action === "view_today") {
           const tasks = await getTodayTasks(userId);
           const flexMessage = buildTaskList(tasks);
@@ -61,39 +122,53 @@ async function handleWebhook(req: Request): Promise<Response> {
           const tasks = await getUserTasks(userId);
           const flexMessage = buildTaskList(tasks);
           await lineClient.replyFlexMessage(replyToken, "งานทั้งหมด", flexMessage);
+        } else if (action === "view_done") {
+          const tasks = await getCompletedTasks(userId);
+          const flexMessage = buildTaskList(tasks);
+          await lineClient.replyFlexMessage(replyToken, "งานที่เสร็จแล้ว", flexMessage);
         } else if (action === "add_task") {
           await lineClient.replyMessage(
             replyToken,
             "✍️ พิมพ์คำสั่งเพิ่มงาน:\n\n" +
-            "งาน [ชื่องาน] [วันนี้/พรุ่งนี้] [เวลา]\n\n" +
-            "ตัวอย่าง:\n" +
-            "งาน ประชุมทีม วันนี้ 14:30"
+              "งาน [ชื่องาน] [วัน] [เวลา]\n\n" +
+              "รองรับรูปแบบวัน:\n" +
+              "• วันนี้ / พรุ่งนี้\n" +
+              "• วันจันทร์ – วันอาทิตย์\n" +
+              "• 25/8 หรือ 25 ส.ค.\n\n" +
+              "ตัวอย่าง:\n" +
+              "งาน ประชุมทีม วันนี้ 14:30\n" +
+              "งาน ส่งรายงาน 25/8 09:00\n" +
+              "งาน ออกกำลังกาย วันเสาร์ 07:00"
           );
         }
       }
 
-      // Handle text messages
-      if (event.type === "message" && event.message.type === "text") {
+      // ── TEXT MESSAGE EVENTS ──────────────────────────────────────
+      if (event.type === "message" && event.message?.type === "text") {
         const userId = event.source.userId;
         const text = event.message.text.trim();
         const replyToken = event.replyToken;
 
         console.log(`[Webhook] Message from ${userId}: ${text}`);
 
-        // Create user if not exists
         await createUserIfNotExists(userId);
 
-        // Handle commands
         if (text === "ช่วยเหลือ" || text === "help") {
           await lineClient.replyMessage(
             replyToken,
             "📋 วิธีใช้งาน:\n\n" +
-            "งาน [ชื่องาน] [วันนี้/พรุ่งนี้] [เวลา]\n\n" +
-            "ตัวอย่าง:\n" +
-            "งาน ประชุมทีม วันนี้ 14:30\n" +
-            "งาน ส่งรายงาน พรุ่งนี้ 09:00\n\n" +
-            "💡 บอทจะเตือนล่วงหน้า 30 นาที\n" +
-            "💡 ส่งสรุปงานวันนี้ทุกเช้า 8:00 น."
+              "งาน [ชื่องาน] [วัน] [เวลา]\n\n" +
+              "รองรับรูปแบบวัน:\n" +
+              "• วันนี้ / พรุ่งนี้\n" +
+              "• วันจันทร์ – วันอาทิตย์\n" +
+              "• 25/8 หรือ 25 ส.ค.\n\n" +
+              "ตัวอย่าง:\n" +
+              "งาน ประชุมทีม วันนี้ 14:30\n" +
+              "งาน ส่งรายงาน พรุ่งนี้ 09:00\n" +
+              "งาน ออกกำลังกาย วันเสาร์ 07:00\n" +
+              "งาน ส่ง TPS 25/8 17:00\n\n" +
+              "💡 บอทจะเตือนล่วงหน้า 30 นาที\n" +
+              "💡 ส่งสรุปงานวันนี้ทุกเช้า 8:00 น."
           );
         } else if (text === "ดูงานวันนี้" || text === "งานวันนี้") {
           const tasks = await getTodayTasks(userId);
@@ -104,7 +179,6 @@ async function handleWebhook(req: Request): Promise<Response> {
           const flexMessage = buildTaskList(tasks);
           await lineClient.replyFlexMessage(replyToken, "งานทั้งหมด", flexMessage);
         } else {
-          // Parse task command
           const parsedTask = parseTask(text);
 
           if (parsedTask) {
@@ -125,9 +199,9 @@ async function handleWebhook(req: Request): Promise<Response> {
             await lineClient.replyMessage(
               replyToken,
               "❌ รูปแบบคำสั่งไม่ถูกต้อง\n\n" +
-              "ใช้รูปแบบ:\n" +
-              "งาน [ชื่องาน] [วันนี้/พรุ่งนี้] [เวลา]\n\n" +
-              "ส่ง \"ช่วยเหลือ\" เพื่อดูตัวอย่าง"
+                "ใช้รูปแบบ:\n" +
+                "งาน [ชื่องาน] [วัน] [เวลา]\n\n" +
+                "ส่ง \"ช่วยเหลือ\" เพื่อดูตัวอย่าง"
             );
           }
         }
@@ -160,10 +234,7 @@ Deno.serve({
           service: "LINE Secretary Bot",
           timestamp: new Date().toISOString(),
         }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }
+        { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }
 

@@ -1,4 +1,6 @@
 // line.ts - LINE Messaging API Client
+import type { QuickReplyItem } from "./types.ts";
+
 export class LineClient {
   private channelAccessToken: string;
 
@@ -7,20 +9,43 @@ export class LineClient {
   }
 
   async replyMessage(replyToken: string, text: string): Promise<void> {
-    const url = "https://api.line.me/v2/bot/message/reply";
-
-    const response = await fetch(url, {
+    const response = await fetch("https://api.line.me/v2/bot/message/reply", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${this.channelAccessToken}`,
       },
       body: JSON.stringify({
-        replyToken: replyToken,
+        replyToken,
+        messages: [{ type: "text", text }],
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error("LINE API Error:", error);
+      throw new Error(`LINE API Error: ${response.status}`);
+    }
+  }
+
+  async replyMessageWithQuickReply(
+    replyToken: string,
+    text: string,
+    quickReplyItems: QuickReplyItem[]
+  ): Promise<void> {
+    const response = await fetch("https://api.line.me/v2/bot/message/reply", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.channelAccessToken}`,
+      },
+      body: JSON.stringify({
+        replyToken,
         messages: [
           {
             type: "text",
-            text: text,
+            text,
+            quickReply: { items: quickReplyItems },
           },
         ],
       }),
@@ -34,23 +59,15 @@ export class LineClient {
   }
 
   async replyFlexMessage(replyToken: string, altText: string, contents: unknown): Promise<void> {
-    const url = "https://api.line.me/v2/bot/message/reply";
-
-    const response = await fetch(url, {
+    const response = await fetch("https://api.line.me/v2/bot/message/reply", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${this.channelAccessToken}`,
       },
       body: JSON.stringify({
-        replyToken: replyToken,
-        messages: [
-          {
-            type: "flex",
-            altText: altText,
-            contents: contents,
-          },
-        ],
+        replyToken,
+        messages: [{ type: "flex", altText, contents }],
       }),
     });
 
@@ -62,9 +79,7 @@ export class LineClient {
   }
 
   async pushFlexMessage(userId: string, altText: string, contents: unknown): Promise<void> {
-    const url = "https://api.line.me/v2/bot/message/push";
-
-    const response = await fetch(url, {
+    const response = await fetch("https://api.line.me/v2/bot/message/push", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -72,13 +87,7 @@ export class LineClient {
       },
       body: JSON.stringify({
         to: userId,
-        messages: [
-          {
-            type: "flex",
-            altText: altText,
-            contents: contents,
-          },
-        ],
+        messages: [{ type: "flex", altText, contents }],
       }),
     });
 
@@ -90,9 +99,7 @@ export class LineClient {
   }
 
   async pushMessage(userId: string, text: string): Promise<void> {
-    const url = "https://api.line.me/v2/bot/message/push";
-
-    const response = await fetch(url, {
+    const response = await fetch("https://api.line.me/v2/bot/message/push", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -100,12 +107,7 @@ export class LineClient {
       },
       body: JSON.stringify({
         to: userId,
-        messages: [
-          {
-            type: "text",
-            text: text,
-          },
-        ],
+        messages: [{ type: "text", text }],
       }),
     });
 
@@ -116,24 +118,26 @@ export class LineClient {
     }
   }
 
-  verifySignature(body: string, signature: string, channelSecret: string): boolean {
-    const encoder = new TextEncoder();
-    const key = encoder.encode(channelSecret);
-    const data = encoder.encode(body);
-
-    return crypto.subtle.importKey(
-      "raw",
-      key,
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"]
-    ).then((cryptoKey) => {
-      return crypto.subtle.sign("HMAC", cryptoKey, data);
-    }).then((signatureBuffer) => {
+  async verifySignature(
+    body: string,
+    signature: string,
+    channelSecret: string
+  ): Promise<boolean> {
+    try {
+      const encoder = new TextEncoder();
+      const key = await crypto.subtle.importKey(
+        "raw",
+        encoder.encode(channelSecret),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+      );
+      const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
       const signatureArray = Array.from(new Uint8Array(signatureBuffer));
-      const signatureHex = signatureArray.map((b) => b.toString(16).padStart(2, "0")).join("");
       const signatureBase64 = btoa(String.fromCharCode(...signatureArray));
       return signatureBase64 === signature;
-    }).catch(() => false);
+    } catch {
+      return false;
+    }
   }
 }

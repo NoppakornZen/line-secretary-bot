@@ -43,6 +43,17 @@ export interface LineWebhookRequest {
   events: LineWebhookEvent[];
 }
 
+export interface QuickReplyItem {
+  type: "action";
+  action: {
+    type: "postback" | "message" | "uri";
+    label: string;
+    data?: string;
+    text?: string;
+    uri?: string;
+  };
+}
+
 export interface FlexBubble {
   type: "bubble";
   size?: "nano" | "micro" | "kilo" | "mega" | "giga";
